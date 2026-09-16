@@ -1,0 +1,10 @@
+manifest_version: 1
+name: billing
+version: 0.1.0
+description: Nous Portal usage widget for the Hermes desktop statusbar — remaining credits plus plan-usage percentage, with portal detail on hover.
+author: anotherchu
+license: MIT
+homepage: https://github.com/anotherchu/billing
+kind: standalone
+requires_hermes: ">=0.19"
+requires_env: []

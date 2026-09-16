@@ -22,15 +22,19 @@ page in the system browser.
 
 ## Install
 
-Drop `plugin.js` into:
+From the Hermes plugin catalog:
 
 ```
-<hermes home>/desktop-plugins/billing/plugin.js
+hermes plugins install billing
 ```
 
-(`~/.hermes` by default), then run **Reload desktop plugins** from `⌘K` in the
-Hermes desktop app. The plugin loads within a few seconds; the statusbar chip
-appears in the right side of the statusbar.
+Then restart the app or run **Reload desktop plugins** from `⌘K`; the plugin
+loads within a few seconds and the statusbar chip appears in the right side of
+the statusbar.
+
+Manual install: copy `desktop/plugin.js` to
+`<hermes home>/desktop-plugins/billing/plugin.js` (`~/.hermes` by default),
+then reload desktop plugins.
 
 ## Requirements
 
@@ -41,6 +45,11 @@ appears in the right side of the statusbar.
 
 Plain ESM, loaded uncompiled — UI is `jsx()` calls, not JSX syntax. Only
 `@hermes/plugin-sdk`, `react`, and `react/jsx-runtime` resolve.
+
+The desktop half lives in `desktop/plugin.js`, with the `plugin.yaml` manifest
+at the repo root: the desktop app materializes `plugins/billing/desktop/` into
+its own plugin root after `hermes plugins install`, and the desktop install
+modal finds the same file.
 
 ## License
 

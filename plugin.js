@@ -1,13 +1,16 @@
 /**
  * Billing — Nous Portal usage widget for the Hermes desktop statusbar.
  *
- * A compact chip beside the version number: remaining spendable credits plus
- * the plan-usage percentage, colour-coded (green while healthy, red when the
- * plan is >=90% used). Hover shows plan / top-up / rollover detail; click
- * opens the Nous Portal billing page.
+ * A compact chip in the statusbar's right cluster — rightmost among the
+ * contributed items (every core readout, including the version number, sits
+ * to its right): remaining spendable credits plus the plan-usage percentage,
+ * red when the plan is >=90% used. Hover shows plan / top-up / rollover
+ * detail; click opens the Nous Portal billing page in the system browser
+ * (`window.open` is denied app-wide; the click goes through
+ * `ctx.os.openExternal`).
  *
- * Data comes from the gateway RPC surface (`billing.state`, `usage.bars`) —
- * the same endpoints the Settings → Billing page and TUI `/topup` consume.
+ * Data comes from ONE gateway RPC — `billing.state`, which embeds the shared
+ * two-bar usage model the Settings → Billing page and TUI `/topup` consume.
  * The chip hides itself when the portal reports no signed-in account or the
  * usage model is unavailable.
  *
@@ -35,15 +38,11 @@ const PORTAL_URL = 'https://portal.nousresearch.com'
 
 function useBillingWidget() {
   return useQuery({
+    // ONE RPC: `billing.state` already embeds the usage model, and every
+    // usage build is a fresh portal fetch — the second call only doubled
+    // portal traffic and opened a window where the two models disagreed.
     queryKey: ['billing', 'widget'],
-    queryFn: async () => {
-      const [billing, usage] = await Promise.all([
-        host.request('billing.state'),
-        host.request('usage.bars')
-      ])
-
-      return { billing, usage }
-    },
+    queryFn: () => host.request('billing.state'),
     refetchInterval: REFRESH_MS,
     staleTime: 30_000,
     retry: 1
@@ -53,6 +52,12 @@ function useBillingWidget() {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const clampPct = value => {
+  // `Number(null)` is 0, which would silently turn a MISSING percentage into
+  // "0%" — keep the nullish case null.
+  if (value == null) {
+    return null
+  }
+
   const n = Number(value)
 
   return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null
@@ -68,7 +73,7 @@ function statusLabel(status) {
 
 // ── chip ──────────────────────────────────────────────────────────────────────
 
-function BillingChip() {
+function BillingChip({ ctx }) {
   const query = useBillingWidget()
 
   // No data yet, a transport failure, or an account the portal does not know:
@@ -77,8 +82,8 @@ function BillingChip() {
     return null
   }
 
-  const billing = query.data?.billing
-  const usage = query.data?.usage
+  const billing = query.data
+  const usage = billing?.usage
 
   if (!billing || billing.ok !== true || billing.logged_in === false) {
     return null
@@ -90,22 +95,22 @@ function BillingChip() {
 
   const planBar = usage.plan_bar ?? null
   const topupBar = usage.topup_bar ?? null
-  const totalDisplay = usage.total_spendable_display ?? billing.balance_display ?? null
+  // `balance_display` is the em dash when the account carries no balance, so
+  // gate it on the underlying `balance_usd` — a placeholder string must not
+  // defeat the "nothing to show" guard below.
+  const balanceDisplay = billing.balance_usd != null ? billing.balance_display : null
+  const totalDisplay = usage.total_spendable_display ?? balanceDisplay ?? null
 
-  if (totalDisplay == null && !planBar && !topupBar) {
+  if (!totalDisplay && !planBar && !topupBar) {
     return null
   }
 
-  // Remaining percentage: 100 minus the plan bucket's spent share when
-  // present, else the top-up bucket's — the single "how much is left" figure.
-  const pctSpent =
-    planBar
-      ? clampPct(planBar.pct_used ?? planBar.fill_fraction * 100)
-      : topupBar
-        ? clampPct(topupBar.pct_used ?? topupBar.fill_fraction * 100)
-        : null
-
-  const pctRemaining = pctSpent != null ? 100 - pctSpent : null
+  // Remaining share of the PLAN bucket — the only percentage the model
+  // supports: `pct_used` is emitted for plan bars alone, and a top-up bucket
+  // has no denominator (its fill_fraction is always 1), so deriving a figure
+  // from it painted a constant, inverted 0%.
+  const pctUsed = planBar ? clampPct(planBar.pct_used) : null
+  const pctRemaining = pctUsed != null ? 100 - pctUsed : null
   const danger = pctRemaining != null && pctRemaining <= 10
   const portalUrl = billing.portal_url ?? PORTAL_URL
 
@@ -123,7 +128,7 @@ function BillingChip() {
         'inline-flex h-full items-center gap-1 rounded-none px-1.5 text-[0.6875rem] tabular-nums transition-colors',
         'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground'
       ),
-      onClick: () => window.open(portalUrl, '_blank', 'noopener,noreferrer'),
+      onClick: () => void ctx.os.openExternal(portalUrl),
       type: 'button',
       children: jsxs('span', {
         className: 'inline-flex items-center gap-1',
@@ -150,16 +155,18 @@ export default {
   id: ID, // must match the folder name
   name: 'Billing',
   description:
-    'Nous Portal usage widget — remaining credits and usage percentage beside the version number, with portal detail on hover.',
+    'Nous Portal usage widget — remaining credits and plan-usage percentage in the statusbar, with portal detail on hover.',
   register(ctx) {
     ctx.registerMany([
       {
         id: 'usage',
         area: STATUSBAR_AREAS.right,
-        // Immediately left of the version number (rightmost core items);
-        // after Kanban's in-flight count (order 80).
+        // Rightmost contributed item on the right side: contributed items
+        // render LEFT of every core item, so this lands after Kanban's
+        // in-flight count (order 80) but still left of the core readouts
+        // (terminal toggle, version number).
         order: 90,
-        render: () => jsx(BillingChip, {})
+        render: () => jsx(BillingChip, { ctx })
       },
       {
         id: 'open',
@@ -181,7 +188,9 @@ export default {
               // Fall back to the canonical portal URL.
             }
 
-            window.open(url, '_blank', 'noopener,noreferrer')
+            // `window.open` is denied app-wide — the shell's audited
+            // open-external door is the only path that reaches the browser.
+            await ctx.os.openExternal(url)
           }
         }
       }
